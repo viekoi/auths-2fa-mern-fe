@@ -15,9 +15,23 @@ FROM node:${NODE_VERSION}-alpine as base
 # Set working directory for all build stages.
 WORKDIR /usr/src/app
 
+
+################################################################################
+# Create a stage for installing production dependecies.
+FROM base as deps
+
+# Download dependencies as a separate step to take advantage of Docker's caching.
+# Leverage a cache mount to /root/.npm to speed up subsequent builds.
+# Leverage bind mounts to package.json and package-lock.json to avoid having to copy them
+# into this layer.
+RUN --mount=type=bind,source=package.json,target=package.json \
+    --mount=type=bind,source=package-lock.json,target=package-lock.json \
+    --mount=type=cache,target=/root/.npm \
+    npm ci --omit=dev
+
 ################################################################################
 # Create a stage for building the application.
-FROM base as build
+FROM deps as build
 
 # Download additional development dependencies before building, as some projects require
 # "devDependencies" to be installed to build. If you don't need this, remove this step.
@@ -39,15 +53,24 @@ RUN npm run build
 FROM base as final
 
 # Use production node environment by default.
+ENV NODE_ENV production
 
 # Copy package.json so that package manager commands can be used.
 COPY package.json .
 
 # Copy the production dependencies from the deps stage and also
 # the built application from the build stage into the image.
-COPY --from=build /usr/src/app/node_modules ./node_modules
+COPY --from=deps /usr/src/app/node_modules ./node_modules
 COPY --from=build /usr/src/app/dist ./dist
 
-EXPOSE 4173
+# Use separate stage for deployable image
+FROM nginxinc/nginx-unprivileged:1.23-alpine-perl
 
-CMD npm run preview
+# Use COPY --link to avoid breaking cache if we change the second stage base image
+COPY --link nginx.conf /etc/nginx/conf.d/default.conf
+
+COPY --link --from=final usr/src/app/dist/ /usr/share/nginx/html
+
+EXPOSE 8080
+
+CMD ["nginx", "-g", "daemon off;"]
