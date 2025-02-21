@@ -63,8 +63,14 @@ COPY package.json .
 COPY --from=deps /usr/src/app/node_modules ./node_modules
 COPY --from=build /usr/src/app/dist ./dist
 
-EXPOSE 5173
+# Use separate stage for deployable image
+FROM nginxinc/nginx-unprivileged:1.23-alpine-perl
 
-CMD npm run dev
+# Use COPY --link to avoid breaking cache if we change the second stage base image
+COPY --link nginx.conf /etc/nginx/conf.d/default.conf
 
+COPY --link --from=final usr/src/app/dist/ /usr/share/nginx/html
 
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
