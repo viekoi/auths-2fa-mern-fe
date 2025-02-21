@@ -48,6 +48,6 @@ COPY package.json .
 COPY --from=build /usr/src/app/node_modules ./node_modules
 COPY --from=build /usr/src/app/dist ./dist
 
-EXPOSE 5173
+EXPOSE 4173
 
-CMD npm run dev
+CMD npm run preview
