@@ -1,0 +1,56 @@
+name: Build and Publish image to Docker Hub
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+env:
+  AWS_REGION: us-east-1
+  GITOPS_REPO_NAME: auths-2fa-mern-gitops
+jobs:
+  build_and_publish_to_ecr:
+    runs-on: ubuntu-latest
+    steps:
+     - name: checkout
+       uses: actions/checkout@v4
+     - name: Configure AWS Credentials
+       uses: aws-actions/configure-aws-credentials@v4
+       with:
+         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+         aws-region: ${{ env.AWS_REGION }}
+     - name: Login to Amazon ECR
+       id: login-ecr
+       uses: aws-actions/amazon-ecr-login@v2
+     - name: Generate unique tag
+       id: tag
+       run: echo "UNIQUE_TAG=$(date +'%Y%m%d%H%M%S')-${GITHUB_RUN_NUMBER}" >> $GITHUB_OUTPUT
+     - name: Build, tag, and push docker image to Amazon ECR
+       env:
+         REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+         REPOSITORY: auths-2fa-mern-dev-frontend
+         IMAGE_TAG: ${{ steps.tag.outputs.UNIQUE_TAG }}
+       run: |
+          docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG .
+          docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
+     - name: Checkout GitOps repository         
+       uses: actions/checkout@v4
+       with:
+         repository: viekoi/${{ env.GITOPS_REPO_NAME }}
+         token: ${{ secrets.GITOPS_REPO_PAT }}
+     - name: Update Deployment File
+       working-directory: kubernetes-manifest/frontend
+       env:
+         REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+         REPOSITORY: auths-2fa-mern-dev-frontend
+         IMAGE_TAG: ${{ steps.tag.outputs.UNIQUE_TAG }}
+         GITOPS_REPO_PAT: ${{ secrets.GITOPS_REPO_PAT }}
+       run: |
+         git config --global user.name "viekoi"
+         git config --global user.email "vkhoi444@gmail.com"
+         IMAGE_TAG="${REGISTRY}/${REPOSITORY}:${IMAGE_TAG}"
+         sed -i "s|image:.*|image: ${IMAGE_TAG}|" deployment.yml
+         git add deployment.yml
+         git commit -m "Update image ${IMAGE_TAG}"
+         git push https://${GITOPS_REPO_PAT}@github.com/viekoi/${GITOPS_REPO_NAME} HEAD:main
