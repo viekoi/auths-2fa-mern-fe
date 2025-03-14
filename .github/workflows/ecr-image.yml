@@ -1,56 +1,114 @@
-name: Build and Publish image to Docker Hub
+name: Build and Publish Image to ECR
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
+    inputs:
+      version_bump:
+        description: 'Version bump type (major, minor, patch)'
+        required: false
+        default: 'patch'
+
 env:
   AWS_REGION: us-east-1
-  GITOPS_REPO_NAME: auths-2fa-mern-gitops
+  ECR_REPOSITORY: auths-2fa-mern-dev-frontend
+
 jobs:
   build_and_publish_to_ecr:
     runs-on: ubuntu-latest
     steps:
-     - name: checkout
-       uses: actions/checkout@v4
-     - name: Configure AWS Credentials
-       uses: aws-actions/configure-aws-credentials@v4
-       with:
-         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-         aws-region: ${{ env.AWS_REGION }}
-     - name: Login to Amazon ECR
-       id: login-ecr
-       uses: aws-actions/amazon-ecr-login@v2
-     - name: Generate unique tag
-       id: tag
-       run: echo "UNIQUE_TAG=$(date +'%Y%m%d%H%M%S')-${GITHUB_RUN_NUMBER}" >> $GITHUB_OUTPUT
-     - name: Build, tag, and push docker image to Amazon ECR
-       env:
-         REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-         REPOSITORY: auths-2fa-mern-dev-frontend
-         IMAGE_TAG: ${{ steps.tag.outputs.UNIQUE_TAG }}
-       run: |
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT }}
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Get Latest ECR Tag
+        id: get-version
+        run: |
+          # Get all tags from ECR repository
+          TAGS=$(aws ecr describe-images \
+            --repository-name ${{ env.ECR_REPOSITORY }} \
+            --query 'imageDetails[*].imageTags[*]' \
+            --output text 2>/dev/null || echo "")
+
+          if [ -z "$TAGS" ]; then
+            # If no tags exist, use 0.1.0 without incrementing
+            CURRENT_VERSION="0.1.0"
+            echo "No tags found in ECR, using initial version: $CURRENT_VERSION"
+            echo "NEW_VERSION=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          else
+            # Get the latest version by sorting numerically
+            CURRENT_VERSION=$(echo "$TAGS" | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+            if [ -z "$CURRENT_VERSION" ]; then
+              CURRENT_VERSION="0.1.0"
+              echo "No valid version tags found, using initial version: $CURRENT_VERSION"
+              echo "NEW_VERSION=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+            else
+              echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+              echo "Latest version found: $CURRENT_VERSION"
+            fi
+          fi
+
+      - name: Increment Version if Exists
+        id: increment-version
+        if: steps.get-version.outputs.CURRENT_VERSION != ''
+        run: |
+          CURRENT_VERSION="${{ steps.get-version.outputs.CURRENT_VERSION }}"
+          VERSION_BUMP="${{ github.event.inputs.version_bump || 'patch' }}"
+
+          # Split version into major, minor, patch
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+
+          # Increment based on bump type
+          case $VERSION_BUMP in
+            "major")
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            "minor")
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            "patch")
+              PATCH=$((PATCH + 1))
+              ;;
+            *)
+              echo "Invalid version bump type. Using patch."
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "New version: $NEW_VERSION"
+
+      - name: Set Initial Version if No Increment
+        id: set-version
+        if: steps.get-version.outputs.NEW_VERSION != ''
+        run: |
+          NEW_VERSION="${{ steps.get-version.outputs.NEW_VERSION }}"
+          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "Using initial version: $NEW_VERSION"
+
+      - name: Build, Tag, and Push Docker Image to Amazon ECR
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: ${{ env.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ steps.increment-version.outputs.NEW_VERSION || steps.set-version.outputs.NEW_VERSION }}
+        run: |
           docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG .
           docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
-     - name: Checkout GitOps repository         
-       uses: actions/checkout@v4
-       with:
-         repository: viekoi/${{ env.GITOPS_REPO_NAME }}
-         token: ${{ secrets.GITOPS_REPO_PAT }}
-     - name: Update Deployment File
-       working-directory: kubernetes-manifest/frontend
-       env:
-         REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-         REPOSITORY: auths-2fa-mern-dev-frontend
-         IMAGE_TAG: ${{ steps.tag.outputs.UNIQUE_TAG }}
-         GITOPS_REPO_PAT: ${{ secrets.GITOPS_REPO_PAT }}
-       run: |
-         git config --global user.name "viekoi"
-         git config --global user.email "vkhoi444@gmail.com"
-         IMAGE_TAG="${REGISTRY}/${REPOSITORY}:${IMAGE_TAG}"
-         sed -i "s|image:.*|image: ${IMAGE_TAG}|" deployment.yml
-         git add deployment.yml
-         git commit -m "Update image ${IMAGE_TAG}"
-         git push https://${GITOPS_REPO_PAT}@github.com/viekoi/${GITOPS_REPO_NAME} HEAD:main
