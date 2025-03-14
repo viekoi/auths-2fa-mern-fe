@@ -111,6 +111,7 @@ jobs:
           IMAGE_TAG: ${{ steps.increment-version.outputs.NEW_VERSION || steps.set-version.outputs.NEW_VERSION }}
           VITE_API_BASE_URL: "http://backend.dev.svc.cluster.local"  
         run: |
+          echo $VITE_API_BASE_URL
           docker build \
             --build-arg VITE_API_BASE_URL=$VITE_API_BASE_URL \
             -t $REGISTRY/$REPOSITORY:$IMAGE_TAG .
