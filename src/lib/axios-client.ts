@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const baseURL = process.env.API_URL 
+const baseURL = process.env.VITE_API_BASE_URL
 
 const options = {
   baseURL,
