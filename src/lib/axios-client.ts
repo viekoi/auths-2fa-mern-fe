@@ -1,7 +1,9 @@
+import { getProjectEnvVariables } from "@/shared/projectEnvVariables";
 import axios from "axios";
 
-const baseURL = process.env.VITE_API_BASE_URL
+const projectEnvVariables = getProjectEnvVariables()
 
+const baseURL = projectEnvVariables.envVariables.VITE_API_BASE_URL
 const options = {
   baseURL,
   withCredentials: true,
