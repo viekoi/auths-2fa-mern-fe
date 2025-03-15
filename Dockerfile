@@ -22,9 +22,9 @@ ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 
 
 
-ARG PORT=80
 
-EXPOSE ${PORT}
+
+EXPOSE 8080
 
 COPY config/app/nginx/nginx.conf /etc/nginx/nginx.conf
 COPY config/app/nginx/conf.d/ /etc/nginx/conf.d/
